@@ -65,6 +65,7 @@ function assert(name, condition, expected, actual) {
 
   const invBefore = await request('GET', '/api/inventory');
   const srcBefore = invBefore.body.find(i => i.store === 'store_a' && i.product === 'p_umbrella');
+  const tgtBefore = invBefore.body.find(i => i.store === 'store_b' && i.product === 'p_umbrella');
 
   console.log('\n[3/5] 库管复核');
   r = await request('POST', `/api/allocations/${allocId}/review`, { operator: 'u_warehouse' });
@@ -90,7 +91,7 @@ function assert(name, condition, expected, actual) {
   const srcAfter = invAfter.body.find(i => i.store === 'store_a' && i.product === 'p_umbrella');
   const tgtAfter = invAfter.body.find(i => i.store === 'store_b' && i.product === 'p_umbrella');
   assert('门店A总库存 -15', srcAfter.qty === srcBefore.qty - 15, srcBefore.qty - 15, srcAfter.qty);
-  assert('门店B总库存 +15', tgtAfter.qty === 45, 45, tgtAfter.qty);
+  assert('门店B总库存 +15', tgtAfter.qty === tgtBefore.qty + 15, tgtBefore.qty + 15, tgtAfter.qty);
 
   console.log('\n[审计查询]');
   r = await request('GET', '/api/audit?status=shipped');

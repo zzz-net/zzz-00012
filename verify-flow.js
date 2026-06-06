@@ -221,11 +221,24 @@ async function step(title, fn) {
     const inv = await request('GET', '/api/inventory');
     const allocs = await request('GET', '/api/allocations');
     const hist = await request('GET', '/api/history');
-    const snapshot = { inv: inv.body, allocs: allocs.body, hist: hist.body };
+    const stocktakeBatches = await request('GET', '/api/stocktake');
+    const stocktakeAdj = await request('GET', '/api/stocktake-adjustments');
+    const stocktakeHist = await request('GET', '/api/stocktake-history');
+    const snapshot = {
+      inv: inv.body,
+      allocs: allocs.body,
+      hist: hist.body,
+      stocktakeBatches: stocktakeBatches.body,
+      stocktakeAdj: stocktakeAdj.body,
+      stocktakeHist: stocktakeHist.body
+    };
     fs.writeFileSync(SNAPSHOT_FILE, JSON.stringify(snapshot, null, 2));
     console.log(`     库存记录数: ${inv.body.length}`);
     console.log(`     调拨单数: ${allocs.body.length}`);
     console.log(`     历史记录数: ${hist.body.length}`);
+    console.log(`     盘点批次数: ${stocktakeBatches.body.length}`);
+    console.log(`     调账记录数: ${stocktakeAdj.body.length}`);
+    console.log(`     盘点审计数: ${stocktakeHist.body.length}`);
     console.log('     ✅ 快照已保存到 data/_snapshot.json');
   });
 

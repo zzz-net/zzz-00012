@@ -36,7 +36,17 @@ const checks = [
   ['包含 check-readme.js 回归说明', c.includes('node check-readme.js')],
   ['包含 smoke-test.js 验收说明', c.includes('node smoke-test.js')],
   ['包含 verify-flow.js 回归脚本说明', c.includes('node verify-flow.js')],
-  ['包含 SQLite 持久化验证步骤', c.includes('allocation.db')]
+  ['包含 SQLite 持久化验证步骤', c.includes('allocation.db')],
+  ['包含盘点创建 curl', c.includes('/api/stocktake') && c.includes('POST')],
+  ['包含盘点明细录入 curl', c.includes('/items') && c.includes('actualQty')],
+  ['包含盘点确认 curl', c.includes('/confirm') && c.includes('stocktake')],
+  ['包含盘点撤销 curl', c.includes('/withdraw') && c.includes('stocktake')],
+  ['包含 STOCKTAKE_ROLE_FORBIDDEN 错误说明', c.includes('STOCKTAKE_ROLE_FORBIDDEN')],
+  ['包含 STOCKTAKE_STORE_FORBIDDEN 错误说明', c.includes('STOCKTAKE_STORE_FORBIDDEN')],
+  ['包含 STOCKTAKE_NEGATIVE_AVAILABLE 错误说明', c.includes('STOCKTAKE_NEGATIVE_AVAILABLE')],
+  ['包含 STOCKTAKE_NOT_PENDING 错误说明', c.includes('STOCKTAKE_NOT_PENDING')],
+  ['包含 verify-stocktake.js 验证脚本说明', c.includes('node verify-stocktake.js')],
+  ['包含 stocktake 表持久化说明', c.includes('stocktake_batches') && c.includes('stocktake_history')]
 ];
 
 let ok = 0, fail = 0;

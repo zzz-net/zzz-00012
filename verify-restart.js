@@ -77,5 +77,20 @@ function assert(name, condition, expected, actual) {
   const audit = await request('GET', '/api/audit?status=shipped');
   assert('审计查询：已出库的调拨单仍可查询', audit.body.length >= 1, '>=1', audit.body.length);
 
+  if (snapshot.stocktakeBatches) {
+    const stBatches = await request('GET', '/api/stocktake');
+    assert('盘点批次数量一致', stBatches.body.length === snapshot.stocktakeBatches.length, snapshot.stocktakeBatches.length, stBatches.body.length);
+    for (const exp of snapshot.stocktakeBatches) {
+      const act = stBatches.body.find(b => b.id === exp.id);
+      assert(`盘点批次 ${exp.id} 状态一致`, act && act.status === exp.status, exp.status, act ? act.status : null);
+    }
+
+    const stAdj = await request('GET', '/api/stocktake-adjustments');
+    assert('调账记录数量一致', stAdj.body.length === snapshot.stocktakeAdj.length, snapshot.stocktakeAdj.length, stAdj.body.length);
+
+    const stHist = await request('GET', '/api/stocktake-history');
+    assert('盘点审计日志数量一致', stHist.body.length >= snapshot.stocktakeHist.length, `>= ${snapshot.stocktakeHist.length}`, stHist.body.length);
+  }
+
   console.log('\n=== 持久化验证通过：服务重启后数据完全一致 ===');
 })();
