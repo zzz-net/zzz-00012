@@ -1,0 +1,13 @@
+{
+  "name": "store-allocation-api",
+  "version": "1.0.0",
+  "description": "门店应急调拨 JSON API",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "init": "node init-data.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2"
+  }
+}
