@@ -126,6 +126,14 @@ async function checkRestartPersistence() {
 
     r = await request('GET', '/api/safety-stock?operator=u_warehouse&store=store_b&product=p_water');
     assert('查询确认已更新', r.body.length === 1 && r.body[0].safetyQty === 120, true, r.body.length === 1 ? r.body[0].safetyQty : null);
+
+    const hist = await request('GET', '/api/purchase-history?action=safety_stock_updated');
+    assert('配置变更已写入追加式日志', hist.body.length >= 1, '>=1', hist.body.length);
+    if (hist.body.length >= 1) {
+      const last = hist.body[hist.body.length - 1];
+      assert('日志操作人为 u_warehouse', last.operator === 'u_warehouse', 'u_warehouse', last.operator);
+      assert('日志含修改说明', last.remark && last.remark.includes('安全库存') && last.remark.includes('100') && last.remark.includes('120'), true, last.remark);
+    }
   });
 
   await step('3. 补货建议计算 - 门店B所有商品', async () => {
@@ -322,6 +330,9 @@ async function checkRestartPersistence() {
 
     const byStore = await request('GET', '/api/purchase-history?store=store_b');
     assert('按门店筛选日志返回门店B的记录（至少5条）', byStore.body.length >= 5, '>=5', byStore.body.length);
+
+    const safetyUpdateHist = await request('GET', '/api/purchase-history?action=safety_stock_updated');
+    assert('safety_stock_updated 操作可查询（配置变更日志）', safetyUpdateHist.body.length >= 1, '>=1', safetyUpdateHist.body.length);
   });
 
   await step('9. 保存数据快照用于重启后验证', async () => {

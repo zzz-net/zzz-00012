@@ -531,3 +531,285 @@ curl.exe -s "http://localhost:3000/api/history?sourceStore=store_a&product=p_umb
 | POST | /api/stocktake/:id/withdraw | 库管撤销未确认批次 |
 | GET | /api/stocktake-adjustments | 差异调账记录（支持按门店/商品/batchId 筛选） |
 | GET | /api/stocktake-history | 盘点审计日志（支持按 batchId/operator/action 筛选） |
+
+## 门店补货建议 & 采购申请模块
+
+根据各门店**现有库存**、**最近 7 天调拨出库量**和**手工配置的安全库存线**，自动算出每个商品是否需要补货、建议补多少，并能一键生成采购申请。所有数据持久化到 SQLite。
+
+### 数据存储
+
+| 表 | 说明 |
+|----|------|
+| safety_stock_config | 安全库存配置（store+product 主键，含更新人/时间） |
+| replenishment_snapshots | 补货建议快照（每次生成保存当时的计算结果） |
+| purchase_requests | 采购申请（含状态、申请人、审批信息、商品明细、操作历史 JSON） |
+| purchase_history | 采购追加式操作日志（created/approved/rejected/completed 等每条单独一行） |
+
+### 补货建议计算规则
+
+```
+需求预估值 = max(安全库存线, 最近7天调拨出库量)
+有效库存 = 当前库存 + 未完成采购量(pending/approved)
+缺口 = 需求预估值 - 有效库存
+建议补货量 = max(缺口, 0)
+是否需补货 = 建议补货量 > 0
+```
+
+### 采购申请状态机
+
+```
+pending（待审批）
+  ├── approved（已审批） ── completed（已到货/入库）
+  └── rejected（已驳回）
+```
+
+### 角色权限
+
+| 角色 | 安全库存配置 | 查看补货建议 | 生成快照 | 创建采购申请 | 审批/驳回 | 标记完成 |
+|------|------------|------------|---------|------------|----------|---------|
+| store_user | ❌ | 仅自己门店 | 仅自己门店 | 仅自己门店 | ❌ | ❌ |
+| warehouse | ✅ 增删改查 | 全部门店 | 全部门店 | 全部门店 | ❌ | ✅ |
+| manager | ❌ | 全部门店 | 全部门店 | ❌ | ✅ | ❌ |
+
+### 安全库存配置维护（库管）
+
+查看所有配置：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/safety-stock?operator=u_warehouse"
+```
+
+新增或修改门店B矿泉水安全库存为 120：
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/safety-stock -H "Content-Type: application/json" -d "{\"store\":\"store_b\",\"product\":\"p_water\",\"safetyQty\":120,\"operator\":\"u_warehouse\"}"
+```
+
+删除配置：
+
+```powershell
+curl.exe --% -s -X DELETE http://localhost:3000/api/safety-stock/store_b/p_water -H "Content-Type: application/json" -d "{\"operator\":\"u_warehouse\"}"
+```
+
+### ❌ 门店用户无权限操作安全库存
+
+```powershell
+curl.exe -s "http://localhost:3000/api/safety-stock?operator=u_store_a"
+```
+
+预期返回：`403 {"error":"SAFETY_STOCK_ROLE_FORBIDDEN", ...}`
+
+### 查看补货建议
+
+查看门店B所有商品的补货建议（库管/经理视角）：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/replenishment/suggestions?store=store_b&operator=u_warehouse"
+```
+
+只看有缺口的商品：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/replenishment/suggestions?store=store_b&operator=u_warehouse&onlyShortage=true"
+```
+
+门店A用户只能看自己门店：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/replenishment/suggestions?operator=u_store_a"
+```
+
+每条建议返回字段：
+- `currentQty` 当前库存
+- `safetyQty` 安全库存线
+- `recentOutbound` 最近7天调拨出库量
+- `pendingPurQty` 未完成采购量（pending/approved）
+- `demandEstimate` 需求预估值 = max(safetyQty, recentOutbound)
+- `effectiveCurrent` 有效库存 = currentQty + pendingPurQty
+- `shortage` 缺口 = demandEstimate - effectiveCurrent
+- `suggestQty` 建议补货量 = max(shortage, 0)
+- `needReplenish` 是否需补货 = suggestQty > 0
+
+### 生成补货建议快照
+
+为门店B生成快照（保存当时的计算结果，重启后仍可查询）：
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/replenishment/snapshot -H "Content-Type: application/json" -d "{\"store\":\"store_b\",\"operator\":\"u_warehouse\"}"
+```
+
+返回 `201 Created`，包含 `id`（如 `rsnap_001`）和汇总信息。
+
+查看快照列表：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/replenishment/snapshots?operator=u_warehouse"
+```
+
+查看单个快照详情：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/replenishment/snapshots/rsnap_001?operator=u_warehouse"
+```
+
+### 完整链路：一键生成采购申请 → 审批/驳回 → 入库
+
+#### 1. 门店B店员为自己门店创建采购申请
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/purchase-requests -H "Content-Type: application/json" -d "{\"store\":\"store_b\",\"items\":[{\"product\":\"p_water\",\"requestQty\":80},{\"product\":\"p_firstaid\",\"requestQty\":10}],\"remark\":\"门店B周末促销备货\",\"operator\":\"u_store_b\"}"
+```
+
+返回 `201 Created`，记下 `id`（如 `pur_001`）。
+
+#### 2. 门店A店员尝试为门店B创建申请（被拒绝）
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/purchase-requests -H "Content-Type: application/json" -d "{\"store\":\"store_b\",\"items\":[{\"product\":\"p_water\",\"requestQty\":10}],\"operator\":\"u_store_a\"}"
+```
+
+预期返回：`403 {"error":"PURCHASE_STORE_FORBIDDEN", ...}`
+
+#### 3. 区域经理驳回申请（必须填写驳回原因）
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/purchase-requests/pur_001/reject -H "Content-Type: application/json" -d "{\"operator\":\"u_manager\",\"remark\":\"采购量过大，请核实后重新提交\"}"
+```
+
+#### 4. 区域经理审批通过
+
+假设重新创建了一个 `pur_002`：
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/purchase-requests/pur_002/approve -H "Content-Type: application/json" -d "{\"operator\":\"u_manager\",\"remark\":\"同意采购，及时入库\"}"
+```
+
+#### 5. 库管标记采购到货入库（库存自动增加）
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/purchase-requests/pur_002/complete -H "Content-Type: application/json" -d "{\"operator\":\"u_warehouse\"}"
+```
+
+完成后门店B对应商品库存按申请量增加。
+
+### ❌ 冲突拦截：同一门店同一商品未完成采购量不能重复占用
+
+先创建一个申请占满门店B矿泉水的建议补货量：
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/purchase-requests -H "Content-Type: application/json" -d "{\"store\":\"store_b\",\"items\":[{\"product\":\"p_water\",\"requestQty\":80}],\"remark\":\"第一次采购\",\"operator\":\"u_store_b\"}"
+```
+
+假设返回 `pur_003`，不要审批。再创建第二个申请也申请矿泉水：
+
+```powershell
+curl.exe --% -s -X POST http://localhost:3000/api/purchase-requests -H "Content-Type: application/json" -d "{\"store\":\"store_b\",\"items\":[{\"product\":\"p_water\",\"requestQty\":50}],\"remark\":\"第二次采购-冲突测试\",\"operator\":\"u_store_b\"}"
+```
+
+预期返回：`400 {"error":"PURCHASE_CONFLICT", ...}`，`conflicts` 数组说明哪个商品冲突、已占用多少、还剩多少可申请。此时第一条申请未写入任何数据，不占库存。
+
+审批时也会再次做冲突检测，避免并发冲突。
+
+### 查询采购申请
+
+门店用户只能看自己门店：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/purchase-requests?operator=u_store_a"
+```
+
+按状态筛选待审批：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/purchase-requests?operator=u_warehouse&status=pending"
+```
+
+查看详情（含操作历史）：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/purchase-requests/pur_001?operator=u_manager"
+```
+
+### 采购操作日志（追加式）
+
+所有采购相关动作和**安全库存配置变更**都会写入追加式日志，不可篡改，可按条件筛选查询：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/purchase-history?operator=u_manager"
+curl.exe -s "http://localhost:3000/api/purchase-history?requestId=pur_001"
+curl.exe -s "http://localhost:3000/api/purchase-history?action=rejected"
+curl.exe -s "http://localhost:3000/api/purchase-history?action=safety_stock_updated"
+curl.exe -s "http://localhost:3000/api/purchase-history?action=safety_stock_deleted"
+```
+
+日志 action 取值说明：
+
+| action | 说明 |
+|--------|------|
+| created | 创建采购申请 |
+| snapshot_ref | 基于补货快照生成采购申请 |
+| approved | 区域经理审批通过 |
+| rejected | 区域经理驳回（含驳回原因） |
+| completed | 库管标记采购到货入库 |
+| safety_stock_updated | 安全库存配置新增或修改 |
+| safety_stock_deleted | 安全库存配置删除 |
+
+### 错误码说明
+
+| 错误码 | 说明 |
+|--------|------|
+| SAFETY_STOCK_ROLE_FORBIDDEN | 门店用户无权限查看/维护安全库存配置 |
+| SAFETY_STOCK_NOT_FOUND | 要删除的安全库存配置不存在 |
+| INVALID_SAFETY_QTY | 安全库存必须为非负整数 |
+| REPLENISH_STORE_FORBIDDEN | 门店用户只能查看/操作自己门店的补货建议 |
+| SNAPSHOT_NOT_FOUND | 补货建议快照不存在 |
+| PURCHASE_ROLE_FORBIDDEN | 该用户角色无权限执行此采购操作 |
+| PURCHASE_STORE_FORBIDDEN | 门店用户只能查看/操作自己门店的采购申请 |
+| PURCHASE_NOT_FOUND | 采购申请不存在 |
+| PURCHASE_NOT_PENDING | 只能审批/驳回待审批(pending)的申请 |
+| PURCHASE_NOT_APPROVED | 只能完成已审批(approved)的申请 |
+| PURCHASE_CONFLICT | 存在未完成采购量冲突，含 conflicts 明细 |
+| MISSING_REMARK | 驳回申请必须填写驳回原因 |
+| DUPLICATE_PRODUCT | 采购申请中同一商品重复出现 |
+
+## SQLite 持久化验证
+
+完成上述操作后：
+
+1. 停止服务（Ctrl+C）
+2. 确认 `data/allocation.db` 文件存在且大小 > 0
+3. 重新启动服务 `npm start`
+4. 查询安全库存配置、补货建议快照、采购申请和操作历史，数据应与停止前完全一致：
+
+```powershell
+curl.exe -s "http://localhost:3000/api/safety-stock?operator=u_warehouse"
+curl.exe -s "http://localhost:3000/api/replenishment/snapshots?operator=u_warehouse"
+curl.exe -s "http://localhost:3000/api/purchase-requests?operator=u_warehouse"
+curl.exe -s "http://localhost:3000/api/purchase-history?operator=u_warehouse"
+```
+
+可使用自动化脚本一键验证：
+
+```powershell
+node verify-replenishment.js
+node verify-replenishment.js --check-restart
+```
+
+## 新增 API 列表
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | /api/safety-stock | 查询安全库存配置（库管/经理） |
+| POST | /api/safety-stock | 新增/修改安全库存配置（库管） |
+| DELETE | /api/safety-stock/:store/:product | 删除安全库存配置（库管） |
+| GET | /api/replenishment/suggestions | 实时计算补货建议（门店用户自动过滤自己门店） |
+| POST | /api/replenishment/snapshot | 生成补货建议快照并持久化 |
+| GET | /api/replenishment/snapshots | 补货建议快照列表 |
+| GET | /api/replenishment/snapshots/:id | 单个快照详情 |
+| GET | /api/purchase-requests | 采购申请列表（门店用户自动过滤自己门店） |
+| GET | /api/purchase-requests/:id | 单个采购申请详情（含操作历史） |
+| POST | /api/purchase-requests | 创建采购申请（从建议一键生成，含冲突检测） |
+| POST | /api/purchase-requests/:id/approve | 区域经理审批通过（含冲突复检） |
+| POST | /api/purchase-requests/:id/reject | 区域经理驳回（必须填原因） |
+| POST | /api/purchase-requests/:id/complete | 库管标记采购到货（库存自动增加） |
+| GET | /api/purchase-history | 采购追加式操作日志（支持按 requestId/operator/action/store 筛选） |

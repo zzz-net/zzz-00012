@@ -1054,6 +1054,8 @@ app.post('/api/safety-stock', async (req, res) => {
 
   const now = nowIso();
   let existing = db.safetyStockConfig.find(c => c.store === store && c.product === product);
+  const isNew = !existing;
+  const oldQty = existing ? existing.safetyQty : null;
   if (existing) {
     existing.safetyQty = safetyQty;
     existing.updatedBy = operator;
@@ -1062,10 +1064,18 @@ app.post('/api/safety-stock', async (req, res) => {
     existing = { store, product, safetyQty, updatedBy: operator, updatedAt: now };
     db.safetyStockConfig.push(existing);
   }
-  await saveAllData();
 
   const st = db.stores.find(s => s.id === existing.store);
   const prod = db.products.find(p => p.id === existing.product);
+  const storeName = st ? st.name : store;
+  const productName = prod ? prod.name : product;
+  const remark = isNew
+    ? `新增安全库存配置：门店 ${storeName} 商品 ${productName} 安全库存=${safetyQty}`
+    : `修改安全库存配置：门店 ${storeName} 商品 ${productName} 安全库存 ${oldQty}→${safetyQty}`;
+  addPurchaseHistory('safety_config', 'safety_stock_updated', operator, remark);
+
+  await saveAllData();
+
   res.json({
     ...existing,
     storeName: st ? st.name : null,
@@ -1090,6 +1100,14 @@ app.delete('/api/safety-stock/:store/:product', async (req, res) => {
     res.status(404).json({ error: 'SAFETY_STOCK_NOT_FOUND', message: '该门店该商品的安全库存配置不存在' });
     return;
   }
+
+  const deleted = db.safetyStockConfig[idx];
+  const st = db.stores.find(s => s.id === store);
+  const prod = db.products.find(p => p.id === product);
+  const storeName = st ? st.name : store;
+  const productName = prod ? prod.name : product;
+  const remark = `删除安全库存配置：门店 ${storeName} 商品 ${productName} 原安全库存=${deleted.safetyQty}`;
+  addPurchaseHistory('safety_config', 'safety_stock_deleted', operator, remark);
 
   db.safetyStockConfig.splice(idx, 1);
   await saveAllData();
