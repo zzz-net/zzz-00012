@@ -113,6 +113,53 @@ CREATE TABLE IF NOT EXISTS stocktake_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_stocktake_history_batch ON stocktake_history(batchId);
+
+CREATE TABLE IF NOT EXISTS safety_stock_config (
+  store TEXT NOT NULL,
+  product TEXT NOT NULL,
+  safetyQty INTEGER NOT NULL,
+  updatedBy TEXT NOT NULL,
+  updatedAt TEXT NOT NULL,
+  PRIMARY KEY (store, product)
+);
+
+CREATE TABLE IF NOT EXISTS replenishment_snapshots (
+  id TEXT PRIMARY KEY,
+  store TEXT NOT NULL,
+  snapshotTime TEXT NOT NULL,
+  itemsJson TEXT NOT NULL DEFAULT '[]',
+  createdBy TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_replenishment_snapshots_store ON replenishment_snapshots(store);
+
+CREATE TABLE IF NOT EXISTS purchase_requests (
+  id TEXT PRIMARY KEY,
+  store TEXT NOT NULL,
+  status TEXT NOT NULL,
+  remark TEXT,
+  applicant TEXT NOT NULL,
+  appliedAt TEXT NOT NULL,
+  reviewer TEXT,
+  reviewedAt TEXT,
+  reviewRemark TEXT,
+  itemsJson TEXT NOT NULL DEFAULT '[]',
+  historyJson TEXT NOT NULL DEFAULT '[]'
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_requests_store ON purchase_requests(store);
+CREATE INDEX IF NOT EXISTS idx_purchase_requests_status ON purchase_requests(status);
+
+CREATE TABLE IF NOT EXISTS purchase_history (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  requestId TEXT NOT NULL,
+  action TEXT NOT NULL,
+  operator TEXT NOT NULL,
+  time TEXT NOT NULL,
+  remark TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_purchase_history_request ON purchase_history(requestId);
 `;
 
 function initSchema() {
@@ -157,7 +204,8 @@ async function isEmpty() {
 }
 
 async function loadAll() {
-  const [users, stores, products, inventory, allocRows, history, batchRows, itemRows, adjRows, stHistRows] = await Promise.all([
+  const [users, stores, products, inventory, allocRows, history, batchRows, itemRows, adjRows, stHistRows,
+    safetyRows, snapRows, prRows, prHistRows] = await Promise.all([
     all('SELECT id, name, role, store FROM users'),
     all('SELECT id, name FROM stores'),
     all('SELECT id, name FROM products'),
@@ -167,7 +215,11 @@ async function loadAll() {
     all('SELECT id, store, status, remark, createdBy, createdAt, confirmedBy, confirmedAt, withdrawnBy, withdrawnAt, withdrawRemark, historyJson FROM stocktake_batches'),
     all('SELECT id, batchId, product, actualQty FROM stocktake_items ORDER BY id ASC'),
     all('SELECT id, batchId, store, product, bookQty, lockedQty, actualQty, diffQty, newBookQty, adjustedBy, adjustedAt FROM stocktake_adjustments ORDER BY id ASC'),
-    all('SELECT id, batchId, action, operator, time, remark FROM stocktake_history ORDER BY id ASC')
+    all('SELECT id, batchId, action, operator, time, remark FROM stocktake_history ORDER BY id ASC'),
+    all('SELECT store, product, safetyQty, updatedBy, updatedAt FROM safety_stock_config'),
+    all('SELECT id, store, snapshotTime, itemsJson, createdBy FROM replenishment_snapshots ORDER BY snapshotTime DESC'),
+    all('SELECT id, store, status, remark, applicant, appliedAt, reviewer, reviewedAt, reviewRemark, itemsJson, historyJson FROM purchase_requests ORDER BY appliedAt DESC'),
+    all('SELECT id, requestId, action, operator, time, remark FROM purchase_history ORDER BY id ASC')
   ]);
 
   users.forEach(u => { if (u.store === null) u.store = null; });
@@ -237,7 +289,60 @@ async function loadAll() {
     remark: r.remark
   }));
 
-  return { users, stores, products, inventory, allocations, history, stocktakeBatches, stocktakeItems, stocktakeAdjustments, stocktakeHistory };
+  const safetyStockConfig = safetyRows.map(r => ({
+    store: r.store,
+    product: r.product,
+    safetyQty: r.safetyQty,
+    updatedBy: r.updatedBy,
+    updatedAt: r.updatedAt
+  }));
+
+  const replenishmentSnapshots = snapRows.map(r => {
+    let items = [];
+    try { items = JSON.parse(r.itemsJson || '[]'); } catch (e) { items = []; }
+    return {
+      id: r.id,
+      store: r.store,
+      snapshotTime: r.snapshotTime,
+      items,
+      createdBy: r.createdBy
+    };
+  });
+
+  const purchaseRequests = prRows.map(r => {
+    let items = [];
+    let hist = [];
+    try { items = JSON.parse(r.itemsJson || '[]'); } catch (e) { items = []; }
+    try { hist = JSON.parse(r.historyJson || '[]'); } catch (e) { hist = []; }
+    return {
+      id: r.id,
+      store: r.store,
+      status: r.status,
+      remark: r.remark,
+      applicant: r.applicant,
+      appliedAt: r.appliedAt,
+      reviewer: r.reviewer,
+      reviewedAt: r.reviewedAt,
+      reviewRemark: r.reviewRemark,
+      items,
+      history: hist
+    };
+  });
+
+  const purchaseHistory = prHistRows.map(r => ({
+    id: r.id,
+    requestId: r.requestId,
+    action: r.action,
+    operator: r.operator,
+    time: r.time,
+    remark: r.remark
+  }));
+
+  return {
+    users, stores, products, inventory, allocations, history,
+    stocktakeBatches, stocktakeItems, stocktakeAdjustments, stocktakeHistory,
+    safetyStockConfig, replenishmentSnapshots, purchaseRequests, purchaseHistory
+  };
 }
 
 async function saveAll(data) {
@@ -313,6 +418,38 @@ async function saveAll(data) {
           await run(
             'INSERT INTO stocktake_history (id, batchId, action, operator, time, remark) VALUES (?, ?, ?, ?, ?, ?)',
             [h.id, h.batchId, h.action, h.operator, h.time, h.remark || null]
+          );
+        }
+
+        await run('DELETE FROM safety_stock_config');
+        for (const s of data.safetyStockConfig || []) {
+          await run(
+            'INSERT INTO safety_stock_config (store, product, safetyQty, updatedBy, updatedAt) VALUES (?, ?, ?, ?, ?)',
+            [s.store, s.product, s.safetyQty, s.updatedBy, s.updatedAt]
+          );
+        }
+
+        await run('DELETE FROM replenishment_snapshots');
+        for (const s of data.replenishmentSnapshots || []) {
+          await run(
+            'INSERT INTO replenishment_snapshots (id, store, snapshotTime, itemsJson, createdBy) VALUES (?, ?, ?, ?, ?)',
+            [s.id, s.store, s.snapshotTime, JSON.stringify(s.items || []), s.createdBy]
+          );
+        }
+
+        await run('DELETE FROM purchase_requests');
+        for (const p of data.purchaseRequests || []) {
+          await run(
+            'INSERT INTO purchase_requests (id, store, status, remark, applicant, appliedAt, reviewer, reviewedAt, reviewRemark, itemsJson, historyJson) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+            [p.id, p.store, p.status, p.remark || null, p.applicant, p.appliedAt, p.reviewer || null, p.reviewedAt || null, p.reviewRemark || null, JSON.stringify(p.items || []), JSON.stringify(p.history || [])]
+          );
+        }
+
+        await run('DELETE FROM purchase_history');
+        for (const h of data.purchaseHistory || []) {
+          await run(
+            'INSERT INTO purchase_history (id, requestId, action, operator, time, remark) VALUES (?, ?, ?, ?, ?, ?)',
+            [h.id, h.requestId, h.action, h.operator, h.time, h.remark || null]
           );
         }
 

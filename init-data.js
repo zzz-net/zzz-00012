@@ -106,6 +106,21 @@ const SAMPLE_STOCKTAKE_HISTORY = [
   { id: 4, batchId: 'stocktake_001', action: 'confirmed', operator: 'u_manager', time: '2026-06-02T14:00:00Z', remark: '区域经理确认，差异已调账' }
 ];
 
+const SAMPLE_SAFETY_STOCK_CONFIG = [
+  { store: 'store_a', product: 'p_umbrella', safetyQty: 40, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_a', product: 'p_water', safetyQty: 250, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_a', product: 'p_mask', safetyQty: 200, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_a', product: 'p_firstaid', safetyQty: 30, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_b', product: 'p_umbrella', safetyQty: 35, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_b', product: 'p_water', safetyQty: 100, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_b', product: 'p_mask', safetyQty: 100, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_b', product: 'p_firstaid', safetyQty: 10, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_c', product: 'p_umbrella', safetyQty: 40, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_c', product: 'p_water', safetyQty: 200, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_c', product: 'p_mask', safetyQty: 150, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' },
+  { store: 'store_c', product: 'p_firstaid', safetyQty: 20, updatedBy: 'u_warehouse', updatedAt: '2026-06-03T10:00:00Z' }
+];
+
 async function initAllData() {
   await initSchema();
   const data = {
@@ -118,7 +133,11 @@ async function initAllData() {
     stocktakeBatches: SAMPLE_STOCKTAKE_BATCHES,
     stocktakeItems: SAMPLE_STOCKTAKE_ITEMS,
     stocktakeAdjustments: SAMPLE_STOCKTAKE_ADJUSTMENTS,
-    stocktakeHistory: SAMPLE_STOCKTAKE_HISTORY
+    stocktakeHistory: SAMPLE_STOCKTAKE_HISTORY,
+    safetyStockConfig: SAMPLE_SAFETY_STOCK_CONFIG,
+    replenishmentSnapshots: [],
+    purchaseRequests: [],
+    purchaseHistory: []
   };
   await saveAll(data);
   console.log('SQLite 数据初始化完成');
