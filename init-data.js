@@ -1,7 +1,4 @@
-const fs = require('fs');
-const path = require('path');
-
-const DATA_DIR = path.join(__dirname, 'data');
+const { initSchema, saveAll, isEmpty, DATA_DIR } = require('./db');
 
 const SAMPLE_USERS = [
   { id: 'u_store_a', name: '门店A店员张三', role: 'store_user', store: 'store_a' },
@@ -58,60 +55,38 @@ const SAMPLE_ALLOCATIONS = [
 ];
 
 const SAMPLE_HISTORY = [
-  {
-    allocationId: 'alloc_001',
-    status: 'pending',
-    operator: 'u_store_b',
-    time: '2026-06-01T09:00:00Z',
-    remark: '提交申请'
-  },
-  {
-    allocationId: 'alloc_001',
-    status: 'reviewed',
-    operator: 'u_warehouse',
-    time: '2026-06-01T09:15:00Z',
-    remark: '库存充足，复核通过'
-  },
-  {
-    allocationId: 'alloc_001',
-    status: 'approved',
-    operator: 'u_manager',
-    time: '2026-06-01T09:30:00Z',
-    remark: '情况紧急，同意调拨'
-  },
-  {
-    allocationId: 'alloc_001',
-    status: 'shipped',
-    operator: 'u_store_a',
-    time: '2026-06-01T10:00:00Z',
-    remark: '已出库并发运'
-  }
+  { allocationId: 'alloc_001', status: 'pending', operator: 'u_store_b', time: '2026-06-01T09:00:00Z', remark: '提交申请' },
+  { allocationId: 'alloc_001', status: 'reviewed', operator: 'u_warehouse', time: '2026-06-01T09:15:00Z', remark: '库存充足，复核通过' },
+  { allocationId: 'alloc_001', status: 'approved', operator: 'u_manager', time: '2026-06-01T09:30:00Z', remark: '情况紧急，同意调拨' },
+  { allocationId: 'alloc_001', status: 'shipped', operator: 'u_store_a', time: '2026-06-01T10:00:00Z', remark: '已出库并发运' }
 ];
 
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+async function initAllData() {
+  await initSchema();
+  const data = {
+    users: SAMPLE_USERS,
+    stores: SAMPLE_STORES,
+    products: SAMPLE_PRODUCTS,
+    inventory: SAMPLE_INVENTORY,
+    allocations: SAMPLE_ALLOCATIONS,
+    history: SAMPLE_HISTORY
+  };
+  await saveAll(data);
+  console.log('SQLite 数据初始化完成');
+  return data;
+}
+
+async function ensureInitialized() {
+  await initSchema();
+  const empty = await isEmpty();
+  if (empty) {
+    return await initAllData();
   }
-}
-
-function writeJson(fileName, data) {
-  const filePath = path.join(DATA_DIR, fileName);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-}
-
-function initAllData() {
-  ensureDataDir();
-  writeJson('users.json', SAMPLE_USERS);
-  writeJson('stores.json', SAMPLE_STORES);
-  writeJson('products.json', SAMPLE_PRODUCTS);
-  writeJson('inventory.json', SAMPLE_INVENTORY);
-  writeJson('allocations.json', SAMPLE_ALLOCATIONS);
-  writeJson('history.json', SAMPLE_HISTORY);
-  console.log('数据初始化完成，已写入 data/ 目录');
+  return null;
 }
 
 if (require.main === module) {
-  initAllData();
+  initAllData().then(() => process.exit(0)).catch(e => { console.error(e); process.exit(1); });
 }
 
-module.exports = { initAllData, DATA_DIR };
+module.exports = { initAllData, ensureInitialized, DATA_DIR };

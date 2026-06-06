@@ -8,6 +8,7 @@
     "init": "node init-data.js"
   },
   "dependencies": {
-    "express": "^4.18.2"
+    "express": "^4.18.2",
+    "sqlite3": "^6.0.1"
   }
 }

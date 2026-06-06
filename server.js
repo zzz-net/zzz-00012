@@ -1,7 +1,6 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
-const { initAllData, DATA_DIR } = require('./init-data');
+const { ensureInitialized } = require('./init-data');
+const { loadAll, saveAll } = require('./db');
 
 const app = express();
 app.use(express.json());
@@ -16,42 +15,21 @@ const STATUS_FLOW = {
   withdrawn: []
 };
 
-let db = {};
+let db = {
+  users: [],
+  stores: [],
+  products: [],
+  inventory: [],
+  allocations: [],
+  history: []
+};
 
-function loadJson(fileName) {
-  const filePath = path.join(DATA_DIR, fileName);
-  if (!fs.existsSync(filePath)) {
-    return null;
-  }
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+async function loadAllData() {
+  db = await loadAll();
 }
 
-function saveJson(fileName, data) {
-  const filePath = path.join(DATA_DIR, fileName);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-}
-
-function loadAllData() {
-  const required = ['users.json', 'stores.json', 'products.json', 'inventory.json', 'allocations.json', 'history.json'];
-  const allExist = required.every(f => fs.existsSync(path.join(DATA_DIR, f)));
-  if (!allExist) {
-    initAllData();
-  }
-  db.users = loadJson('users.json');
-  db.stores = loadJson('stores.json');
-  db.products = loadJson('products.json');
-  db.inventory = loadJson('inventory.json');
-  db.allocations = loadJson('allocations.json');
-  db.history = loadJson('history.json');
-}
-
-function saveAllData() {
-  saveJson('users.json', db.users);
-  saveJson('stores.json', db.stores);
-  saveJson('products.json', db.products);
-  saveJson('inventory.json', db.inventory);
-  saveJson('allocations.json', db.allocations);
-  saveJson('history.json', db.history);
+async function saveAllData() {
+  await saveAll(db);
 }
 
 function getUser(userId) {
@@ -123,8 +101,6 @@ function validateStatusTransition(current, next, res) {
   return true;
 }
 
-loadAllData();
-
 app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', time: nowIso() });
 });
@@ -166,7 +142,7 @@ app.get('/api/allocations/:id', (req, res) => {
   res.json(alloc);
 });
 
-app.post('/api/allocations', (req, res) => {
+app.post('/api/allocations', async (req, res) => {
   const { sourceStore, targetStore, product, qty, reason, operator } = req.body;
 
   if (!sourceStore || !targetStore || !product || !qty || !reason || !operator) {
@@ -224,12 +200,12 @@ app.post('/api/allocations', (req, res) => {
   const hist = addHistory(allocId, 'pending', operator, '提交调拨申请');
   alloc.history.push(hist);
   db.allocations.push(alloc);
-  saveAllData();
+  await saveAllData();
 
   res.status(201).json(alloc);
 });
 
-app.post('/api/allocations/:id/review', (req, res) => {
+app.post('/api/allocations/:id/review', async (req, res) => {
   const { operator } = req.body;
   const alloc = db.allocations.find(a => a.id === req.params.id);
   if (!alloc) {
@@ -267,12 +243,12 @@ app.post('/api/allocations/:id/review', (req, res) => {
   alloc.status = 'reviewed';
   const hist = addHistory(alloc.id, 'reviewed', operator, '库存复核通过');
   alloc.history.push(hist);
-  saveAllData();
+  await saveAllData();
 
   res.json(alloc);
 });
 
-app.post('/api/allocations/:id/reject', (req, res) => {
+app.post('/api/allocations/:id/reject', async (req, res) => {
   const { operator, remark } = req.body;
   const alloc = db.allocations.find(a => a.id === req.params.id);
   if (!alloc) {
@@ -301,12 +277,12 @@ app.post('/api/allocations/:id/reject', (req, res) => {
   alloc.status = 'rejected';
   const hist = addHistory(alloc.id, 'rejected', operator, remark || '申请被驳回');
   alloc.history.push(hist);
-  saveAllData();
+  await saveAllData();
 
   res.json(alloc);
 });
 
-app.post('/api/allocations/:id/approve', (req, res) => {
+app.post('/api/allocations/:id/approve', async (req, res) => {
   const { operator } = req.body;
   const alloc = db.allocations.find(a => a.id === req.params.id);
   if (!alloc) {
@@ -339,12 +315,12 @@ app.post('/api/allocations/:id/approve', (req, res) => {
   alloc.status = 'approved';
   const hist = addHistory(alloc.id, 'approved', operator, '区域经理审批通过，库存已锁定');
   alloc.history.push(hist);
-  saveAllData();
+  await saveAllData();
 
   res.json(alloc);
 });
 
-app.post('/api/allocations/:id/ship', (req, res) => {
+app.post('/api/allocations/:id/ship', async (req, res) => {
   const { operator } = req.body;
   const alloc = db.allocations.find(a => a.id === req.params.id);
   if (!alloc) {
@@ -388,12 +364,12 @@ app.post('/api/allocations/:id/ship', (req, res) => {
   alloc.status = 'shipped';
   const hist = addHistory(alloc.id, 'shipped', operator, '出库确认，库存已扣减');
   alloc.history.push(hist);
-  saveAllData();
+  await saveAllData();
 
   res.json(alloc);
 });
 
-app.post('/api/allocations/:id/withdraw', (req, res) => {
+app.post('/api/allocations/:id/withdraw', async (req, res) => {
   const { operator, remark } = req.body;
   const alloc = db.allocations.find(a => a.id === req.params.id);
   if (!alloc) {
@@ -417,7 +393,7 @@ app.post('/api/allocations/:id/withdraw', (req, res) => {
   alloc.status = 'withdrawn';
   const hist = addHistory(alloc.id, 'withdrawn', operator, remark || '申请已撤回');
   alloc.history.push(hist);
-  saveAllData();
+  await saveAllData();
 
   res.json(alloc);
 });
@@ -489,10 +465,16 @@ app.get('/api/audit', (req, res) => {
   res.json(result);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`门店应急调拨 API 已启动: http://localhost:${PORT}`);
-  console.log('健康检查: GET /api/health');
-});
+(async () => {
+  await ensureInitialized();
+  await loadAllData();
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`门店应急调拨 API 已启动: http://localhost:${PORT}`);
+    console.log('数据库: SQLite (data/allocation.db)');
+    console.log('健康检查: GET /api/health');
+  });
+})();
 
 module.exports = app;
